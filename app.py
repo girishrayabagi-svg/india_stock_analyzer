@@ -147,7 +147,6 @@ stock_list = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS"]
 ticker = st.selectbox("Choose a Stock", stock_list, index=0)
 years = st.slider("Years of history", 1, 15, 5)
 
-)
 def add_indicators(df):
     # RSI
     df['RSI'] = ta.momentum.RSIIndicator(df['Close']).rsi()
