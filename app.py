@@ -1,230 +1,457 @@
-import streamlit as st
-import yfinance as yf
+# app.py
+# Full-featured Indian Stock Analyzer — Indicators • Backtests • Predictions
+# Save this file as app.py and run with Streamlit.
+
+import warnings
+warnings.filterwarnings("ignore")
+
+import math
 import pandas as pd
 import numpy as np
-import plotly.graph_objs as go
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error
+import yfinance as yf
+from datetime import datetime, timedelta, timezone
+import streamlit as st
+import plotly.graph_objects as go
+import matplotlib.pyplot as plt
 
-# -----------------------------
-# Helper Plot Functions
-# -----------------------------
-def plot_candles(df, ticker):
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(
-        x=df.index,
-        open=df['Open'],
-        high=df['High'],
-        low=df['Low'],
-        close=df['Close'],
-        name="Candlestick"
-    ))
+# technical analysis helpers
+import ta
+
+# scikit-learn
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.model_selection import TimeSeriesSplit, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, mean_squared_error
+
+# ----------------------------
+# Config
+# ----------------------------
+IST = timezone(timedelta(hours=5, minutes=30))
+
+st.set_page_config(page_title="Indian Stock Analyzer", page_icon="📈", layout="wide")
+st.title("📈 Indian Stock Analyzer — Full Technical Suite, Backtests & Predictions")
+st.caption("Educational — not financial advice. Data via Yahoo Finance (yfinance).")
+
+# =============================
+# Helper Plotting Functions
+# =============================
+
+def plot_candles(df: pd.DataFrame, ticker: str):
+    """Plot a Plotly candlestick chart. Accepts either Date column or DatetimeIndex."""
+    if df is None or df.empty:
+        st.error("No data to plot.")
+        return
+
+    # ensure Date column exists for plotting if index is datetime
+    if "Date" in df.columns:
+        x = df["Date"]
+    else:
+        x = df.index
+
+    fig = go.Figure(data=[go.Candlestick(
+        x=x,
+        open=df["Open"],
+        high=df["High"],
+        low=df["Low"],
+        close=df["Close"],
+        name="Price"
+    )])
     fig.update_layout(
         title=f"{ticker} Candlestick Chart",
-        xaxis_rangeslider_visible=False,
-        template="plotly_dark",
-        height=600
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-@st.cache_data
-def load_data(ticker, years):
-    """Download stock data from Yahoo Finance"""
-    df = yf.download(ticker, period=f"{years}y", interval="1d")
-    df.reset_index(inplace=True)
-    return df
-    
-def plot_price_with_indicators(df, ticker):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=df['Close'],
-        mode='lines',
-        name="Close Price"
-    ))
-    if "MA20" in df.columns:
-        fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df['MA20'],
-            mode='lines',
-            name="MA20"
-        ))
-    if "MA50" in df.columns:
-        fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df['MA50'],
-            mode='lines',
-            name="MA50"
-        ))
-    fig.update_layout(
-        title=f"{ticker} Price with Indicators",
         xaxis_title="Date",
-        yaxis_title="Price",
-        template="plotly_dark",
+        yaxis_title="Price (INR)",
+        xaxis_rangeslider_visible=False,
+        template="plotly_white",
         height=600
     )
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_rsi(df, ticker):
-    if "RSI" not in df.columns:
+def plot_price_with_indicators(df: pd.DataFrame, ticker: str):
+    if df is None or df.empty:
+        st.error("No data to plot.")
         return
+
+    if "Date" in df.columns:
+        x = df["Date"]
+    else:
+        x = df.index
+
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=df['RSI'],
-        mode='lines',
-        name="RSI"
-    ))
+    fig.add_trace(go.Scatter(x=x, y=df["Close"], mode="lines", name="Close Price"))
+    if "SMA_20" in df.columns:
+        fig.add_trace(go.Scatter(x=x, y=df["SMA_20"], mode="lines", name="SMA 20"))
+    if "SMA_50" in df.columns:
+        fig.add_trace(go.Scatter(x=x, y=df["SMA_50"], mode="lines", name="SMA 50"))
+    if "SUPERTREND" in df.columns:
+        fig.add_trace(go.Scatter(x=x, y=df["SUPERTREND"], mode="lines", name="Supertrend"))
+    fig.update_layout(title=f"{ticker} — Price & Key Indicators", template="plotly_white", height=500)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def plot_rsi(df: pd.DataFrame, ticker: str):
+    if df is None or df.empty or "RSI_14" not in df.columns:
+        return
+    if "Date" in df.columns:
+        x = df["Date"]
+    else:
+        x = df.index
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x, y=df["RSI_14"], mode="lines", name="RSI (14)"))
     fig.add_hline(y=70, line_dash="dash", line_color="red")
     fig.add_hline(y=30, line_dash="dash", line_color="green")
-    fig.update_layout(
-        title=f"{ticker} RSI",
-        template="plotly_dark",
-        height=400
-    )
+    fig.update_layout(title=f"{ticker} — RSI (14)", template="plotly_white", height=300)
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_macd(df, ticker):
-    if "MACD" not in df.columns or "Signal" not in df.columns:
+def plot_macd(df: pd.DataFrame, ticker: str):
+    if df is None or df.empty or "MACD" not in df.columns or "MACD_SIGNAL" not in df.columns:
         return
+    if "Date" in df.columns:
+        x = df["Date"]
+    else:
+        x = df.index
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=df['MACD'],
-        mode='lines',
-        name="MACD"
-    ))
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=df['Signal'],
-        mode='lines',
-        name="Signal"
-    ))
-    fig.update_layout(
-        title=f"{ticker} MACD",
-        template="plotly_dark",
-        height=400
-    )
+    fig.add_trace(go.Scatter(x=x, y=df["MACD"], mode="lines", name="MACD"))
+    fig.add_trace(go.Scatter(x=x, y=df["MACD_SIGNAL"], mode="lines", name="Signal"))
+    fig.update_layout(title=f"{ticker} — MACD", template="plotly_white", height=300)
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_bollinger(df, ticker):
-    if "BB_High" not in df.columns or "BB_Low" not in df.columns:
+def plot_bollinger(df: pd.DataFrame, ticker: str):
+    # expects BB_HIGH, BB_LOW or BB_UPPER/BB_LOWER naming
+    if df is None or df.empty:
         return
+    if "BB_UPPER" in df.columns and "BB_LOWER" in df.columns:
+        upper = "BB_UPPER"; lower = "BB_LOWER"
+    elif "BB_High" in df.columns and "BB_Low" in df.columns:
+        upper = "BB_High"; lower = "BB_Low"
+    else:
+        return
+
+    if "Date" in df.columns:
+        x = df["Date"]
+    else:
+        x = df.index
+
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=df['Close'],
-        mode='lines',
-        name="Close"
-    ))
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=df['BB_High'],
-        mode='lines',
-        name="BB High",
-        line=dict(color='red', dash='dot')
-    ))
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=df['BB_Low'],
-        mode='lines',
-        name="BB Low",
-        line=dict(color='blue', dash='dot')
-    ))
-    fig.update_layout(
-        title=f"{ticker} Bollinger Bands",
-        template="plotly_dark",
-        height=400
-    )
+    fig.add_trace(go.Scatter(x=x, y=df["Close"], mode="lines", name="Close"))
+    fig.add_trace(go.Scatter(x=x, y=df[upper], mode="lines", name="BB Upper", line=dict(dash="dot")))
+    fig.add_trace(go.Scatter(x=x, y=df[lower], mode="lines", name="BB Lower", line=dict(dash="dot")))
+    fig.update_layout(title=f"{ticker} — Bollinger Bands", template="plotly_white", height=350)
     st.plotly_chart(fig, use_container_width=True)
 
 
-# -----------------------------
-# Streamlit UI
-# -----------------------------
-st.title("📈 Indian Stock Analyzer & Predictor")
+# ----------------------------
+# Data loading & indicators
+# ----------------------------
 
-stock_list = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS"]
+@st.cache_data(show_spinner=False)
+def load_price_data(ticker: str, start: str, end: str, interval: str="1d") -> pd.DataFrame:
+    """Load historical price data from yfinance. Returns DataFrame with Date column and numeric OHLCV."""
+    df = yf.download(ticker, start=start, end=end, interval=interval, auto_adjust=True, progress=False)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    # normalize columns to Title case (Open, High, Low, Close, Volume)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df = df.rename(columns=str.title)
+    # ensure Date column exists for functions that expect it
+    if not isinstance(df.index, pd.DatetimeIndex):
+        try:
+            df.index = pd.to_datetime(df.index)
+        except Exception:
+            pass
+    df = df.sort_index()
+    df_reset = df.copy()
+    df_reset["Date"] = df_reset.index
+    return df_reset
 
-ticker = st.selectbox("Choose a Stock", stock_list, index=0)
-years = st.slider("Years of history", 1, 15, 5)
+def add_supertrend(df: pd.DataFrame, period: int=10, multiplier: float=3.0) -> pd.DataFrame:
+    df = df.copy()
+    atr = ta.volatility.AverageTrueRange(df["High"], df["Low"], df["Close"], window=period).average_true_range()
+    hl2 = (df["High"] + df["Low"]) / 2
+    upperband = hl2 + multiplier * atr
+    lowerband = hl2 - multiplier * atr
 
-def add_indicators(df):
-    # RSI
-    df['RSI'] = ta.momentum.RSIIndicator(df['Close']).rsi()
+    supertrend = pd.Series(index=df.index, dtype=float)
+    direction = pd.Series(index=df.index, dtype=int)
+
+    # initialize
+    supertrend.iloc[0] = upperband.iloc[0]
+    direction.iloc[0] = 1
+
+    for i in range(1, len(df)):
+        curr_upper = upperband.iloc[i]
+        curr_lower = lowerband.iloc[i]
+        prev_st = supertrend.iloc[i-1]
+        prev_dir = direction.iloc[i-1]
+        close = df["Close"].iloc[i]
+
+        if prev_dir == 1:
+            curr_st = min(curr_upper, prev_st) if close <= prev_st else curr_lower
+            curr_dir = 1 if close <= prev_st else -1
+        else:
+            curr_st = max(curr_lower, prev_st) if close >= prev_st else curr_upper
+            curr_dir = -1 if close >= prev_st else 1
+
+        supertrend.iloc[i] = curr_st
+        direction.iloc[i] = curr_dir
+
+    df["SUPERTREND"] = supertrend
+    df["SUPERTREND_DIR"] = direction
+    return df
+
+def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Add many technical indicators to df and return; expects 'Open/High/Low/Close/Volume' columns and Date column."""
+    if df is None or df.empty:
+        return df
+    df = df.copy()
+
+    # Moving averages
+    df["SMA_20"] = ta.trend.sma_indicator(df["Close"], window=20)
+    df["SMA_50"] = ta.trend.sma_indicator(df["Close"], window=50)
+    df["EMA_12"] = ta.trend.ema_indicator(df["Close"], window=12)
+    df["EMA_26"] = ta.trend.ema_indicator(df["Close"], window=26)
 
     # MACD
-    macd = ta.trend.MACD(df['Close'])
-    df['MACD'] = macd.macd()
-    df['MACD_Signal'] = macd.macd_signal()
-    df['MACD_Hist'] = macd.macd_diff()
+    macd = ta.trend.MACD(df["Close"])
+    df["MACD"] = macd.macd()
+    df["MACD_SIGNAL"] = macd.macd_signal()
+    df["MACD_DIFF"] = macd.macd_diff()
 
-    # Bollinger Bands
-    from ta.volatility import BollingerBands
-    indicator_bb = BollingerBands(close=df["Close"], window=20, window_dev=2)
-    df['BB_High'] = indicator_bb.bollinger_hband()
-    df['BB_Low'] = indicator_bb.bollinger_lband()
-    df['BB_Mid'] = indicator_bb.bollinger_mavg()
+    # RSI
+    df["RSI_14"] = ta.momentum.RSIIndicator(df["Close"], window=14).rsi()
+
+    # Stochastic
+    stoch = ta.momentum.StochasticOscillator(df["High"], df["Low"], df["Close"], window=14, smooth_window=3)
+    df["STOCH_K"] = stoch.stoch()
+    df["STOCH_D"] = stoch.stoch_signal()
+
+    # Bollinger Bands (using ta) — ensure Series assignments, not DataFrame
+    bb = ta.volatility.BollingerBands(close=df["Close"], window=20, window_dev=2)
+    df["BB_UPPER"] = bb.bollinger_hband()
+    df["BB_LOWER"] = bb.bollinger_lband()
+    df["BB_MAVG"] = bb.bollinger_mavg()
+    df["BB_WIDTH"] = (df["BB_UPPER"] - df["BB_LOWER"]) / df["Close"]
+
+    # ATR, ADX, CCI, MFI, OBV
+    df["ATR_14"] = ta.volatility.AverageTrueRange(df["High"], df["Low"], df["Close"], window=14).average_true_range()
+    df["ADX_14"] = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"], window=14).adx()
+    df["CCI_20"] = ta.trend.CCIIndicator(df["High"], df["Low"], df["Close"], window=20).cci()
+    df["MFI_14"] = ta.volume.MFIIndicator(df["High"], df["Low"], df["Close"], df["Volume"], window=14).money_flow_index()
+    df["OBV"] = ta.volume.OnBalanceVolumeIndicator(df["Close"], df["Volume"]).on_balance_volume()
+
+    # Ichimoku basics
+    ichi = ta.trend.IchimokuIndicator(df["High"], df["Low"], window1=9, window2=26, window3=52)
+    df["ICH_TENKAN"] = ichi.ichimoku_conversion_line()
+    df["ICH_KIJUN"] = ichi.ichimoku_base_line()
+
+    # Returns
+    df["RET_1D"] = df["Close"].pct_change()
+    df["FWD_RET_1D"] = df["Close"].pct_change().shift(-1)
+
+    # Supertrend
+    df = add_supertrend(df, period=10, multiplier=3.0)
 
     return df
 
+# ----------------------------
+# Backtesting helpers
+# ----------------------------
 
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+def compute_strategy_signals(df: pd.DataFrame, name: str):
+    sig = pd.Series(0, index=df.index, dtype=int)
+    if name == "RSI (Buy<30, Sell>70)":
+        sig[df["RSI_14"] < 30] = 1
+        sig[df["RSI_14"] > 70] = -1
+    elif name == "MACD (Signal Cross)":
+        cross_up = (df["MACD"].shift(1) < df["MACD_SIGNAL"].shift(1)) & (df["MACD"] > df["MACD_SIGNAL"])
+        cross_dn = (df["MACD"].shift(1) > df["MACD_SIGNAL"].shift(1)) & (df["MACD"] < df["MACD_SIGNAL"])
+        sig[cross_up] = 1
+        sig[cross_dn] = -1
+    elif name == "Supertrend (Dir)":
+        sig[df["SUPERTREND_DIR"] == 1] = 1
+        sig[df["SUPERTREND_DIR"] == -1] = -1
+    elif name == "SMA 20/50 Cross":
+        cross_up = (df["SMA_20"].shift(1) < df["SMA_50"].shift(1)) & (df["SMA_20"] > df["SMA_50"])
+        cross_dn = (df["SMA_20"].shift(1) > df["SMA_50"].shift(1)) & (df["SMA_20"] < df["SMA_50"])
+        sig[cross_up] = 1
+        sig[cross_dn] = -1
+    return sig
 
+def backtest_signals(df: pd.DataFrame, signals: pd.Series, trade_cost_bps: float = 5.0):
+    cost = trade_cost_bps / 10000.0
+    pos = signals.replace(0, method="ffill").fillna(0)
+    ret = df["RET_1D"].fillna(0.0)
+    strat_ret = pos.shift(1).fillna(0) * ret
+    trades = pos.diff().abs().fillna(0)
+    strat_ret -= trades * cost
+    equity = (1 + strat_ret).cumprod()
+    total_return = equity.iloc[-1] - 1
+    days = (df.index[-1] - df.index[0]).days or 1
+    cagr = (1 + total_return) ** (365.25 / days) - 1
+    sharpe = (strat_ret.mean() / (strat_ret.std() + 1e-9)) * math.sqrt(252)
+    cum_max = equity.cummax()
+    drawdown = (equity / cum_max - 1).min()
+    wins = (strat_ret > 0).sum()
+    losses = (strat_ret <= 0).sum()
+    win_rate = wins / max(1, (wins + losses))
+    stats = {
+        "Total Return": f"{total_return*100:.2f}%",
+        "CAGR": f"{cagr*100:.2f}%",
+        "Sharpe (≈)": f"{sharpe:.2f}",
+        "Max Drawdown": f"{drawdown*100:.2f}%",
+        "Win Rate": f"{win_rate*100:.2f}%",
+        "Trades (direction changes)": int(trades.sum())
+    }
+    return equity, strat_ret, stats
+
+def show_backtest(df: pd.DataFrame, strategy_name: str, trade_cost_bps: float):
+    signals = compute_strategy_signals(df, strategy_name)
+    equity, strat_ret, stats = backtest_signals(df, signals, trade_cost_bps=trade_cost_bps)
+    st.subheader("Backtest Performance")
+    st.json(stats)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=(1+df["RET_1D"].fillna(0)).cumprod(), name="Buy & Hold"))
+    fig.add_trace(go.Scatter(x=df.index, y=equity, name=strategy_name))
+    fig.update_layout(title="Equity Curve (₹1 initial)", xaxis_title="Date", yaxis_title="Equity (normalized)")
+    st.plotly_chart(fig, use_container_width=True)
+
+# ----------------------------
+# Prediction / ML
+# ----------------------------
+
+def build_features(df: pd.DataFrame) -> pd.DataFrame:
+    feats = df[[
+        "SMA_20","SMA_50","EMA_12","EMA_26","MACD","MACD_SIGNAL","MACD_DIFF",
+        "RSI_14","STOCH_K","STOCH_D","BB_UPPER","BB_LOWER","BB_MAVG","BB_WIDTH","ATR_14","ADX_14","CCI_20","MFI_14","OBV",
+        "SUPERTREND","SUPERTREND_DIR"
+    ]].copy()
+    feats["RET_1D"] = df["RET_1D"]
+    feats["RET_5D"] = df["Close"].pct_change(5)
+    feats["RET_10D"] = df["Close"].pct_change(10)
+    feats = feats.dropna()
+    return feats
+
+def train_predict(df: pd.DataFrame, horizon_days: int = 1):
+    feats = build_features(df)
+    if len(feats) < 60:
+        raise ValueError("Not enough data for prediction. Increase history or use daily interval (1d).")
+    y_class = (df["FWD_RET_1D"].loc[feats.index] > 0).astype(int)
+    y_reg = df["FWD_RET_1D"].loc[feats.index]
+    tscv = TimeSeriesSplit(n_splits=5)
+    last_train_idx, last_test_idx = None, None
+    for train_idx, test_idx in tscv.split(feats):
+        last_train_idx, last_test_idx = train_idx, test_idx
+    X_train, X_test = feats.iloc[last_train_idx], feats.iloc[last_test_idx]
+    yc_train, yc_test = y_class.iloc[last_train_idx], y_class.iloc[last_test_idx]
+    yr_train, yr_test = y_reg.iloc[last_train_idx], y_reg.iloc[last_test_idx]
+    clf1 = Pipeline([("scaler", StandardScaler()), ("lr", LogisticRegression(max_iter=1000))])
+    clf2 = RandomForestClassifier(n_estimators=300, random_state=42, max_depth=6)
+    clf1.fit(X_train, yc_train)
+    clf2.fit(X_train, yc_train)
+    pred1 = clf1.predict(X_test)
+    pred2 = clf2.predict(X_test)
+    acc1 = accuracy_score(yc_test, pred1)
+    acc2 = accuracy_score(yc_test, pred2)
+    clf_best = clf2 if acc2 >= acc1 else clf1
+    best_name = "RandomForestClassifier" if clf_best is clf2 else "LogisticRegression"
+    rfr = RandomForestRegressor(n_estimators=400, random_state=42, max_depth=8)
+    rfr.fit(X_train, yr_train)
+    yreg_pred = rfr.predict(X_test)
+    rmse = np.sqrt(mean_squared_error(yr_test, yreg_pred))
+    X_latest = feats.iloc[[-1]]
+    class_up_prob = clf_best.predict_proba(X_latest)[0][1] if hasattr(clf_best, "predict_proba") else float(clf_best.predict(X_latest)[0])
+    next_day_ret = float(rfr.predict(X_latest)[0])
+    results = {
+        "Classifier Used": best_name,
+        "Validation Accuracy (last fold)": f"{max(acc1, acc2)*100:.2f}%",
+        "Regressor RMSE (last fold)": f"{rmse*100:.2f} % return",
+        "Prob(Up Tomorrow)": f"{class_up_prob*100:.2f}%",
+        "Predicted Next-Day Return": f"{next_day_ret*100:.2f}%"
+    }
+    importances = None
+    if hasattr(clf_best, "feature_importances_"):
+        importances = pd.Series(clf_best.feature_importances_, index=feats.columns).sort_values(ascending=False).head(15)
+    return results, importances
+
+# ----------------------------
+# Streamlit UI
+# ----------------------------
+with st.sidebar:
+    st.header("⚙️ Settings")
+    stock_list = [
+        "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","SBIN.NS","AXISBANK.NS","WIPRO.NS","BHARTIARTL.NS"
+    ]
+    ticker = st.selectbox("Choose a Stock", stock_list, index=0)
+    years = st.slider("Years of history", 1, 15, 5)
+    interval = st.selectbox("Interval", ["1d", "1h", "15m"])
+    start = (datetime.now(IST) - timedelta(days=365*years)).date().isoformat()
+    end = (datetime.now(IST) + timedelta(days=1)).date().isoformat()
+    st.markdown("---")
+    st.write("**Backtest**")
+    strategy_name = st.selectbox("Strategy", ["RSI (Buy<30, Sell>70)","MACD (Signal Cross)","Supertrend (Dir)","SMA 20/50 Cross"])
+    cost_bps = st.number_input("Per-Trade Cost (bps each side)", min_value=0.0, max_value=50.0, value=5.0, step=0.5)
+    st.markdown("---")
+    if st.button("Load / Refresh Data"):
+        st.session_state["reload"] = True
 
 # Load data
-df_ind = load_data(ticker, years)
+try:
+    df = load_price_data(ticker, start, end, interval=interval)
+    if df.empty:
+        st.error("No data returned. Check ticker/interval.")
+        st.stop()
+except Exception as e:
+    st.error(f"Failed to load data: {e}")
+    st.stop()
 
-# Show Charts
-plot_candles(df_ind, ticker)
-plot_price_with_indicators(df_ind, ticker)
-plot_rsi(df_ind, ticker)
-plot_macd(df_ind, ticker)
-plot_bollinger(df_ind, ticker)
+# Add indicators
+df_ind = add_indicators(df)
 
-# -----------------------------
-# Prediction Section
-# -----------------------------
+# Tabs
+tab1, tab2, tab3, tab4 = st.tabs(["Overview","Indicators & Charts","Backtest","Predict"])
 
-st.subheader("🔮 Stock Price Prediction")
+with tab1:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Last Close", f"₹{df_ind['Close'].iloc[-1]:.2f}")
+    c2.metric("1D Change", f"{df_ind['RET_1D'].iloc[-1]*100:.2f}%")
+    c3.metric("RSI-14", f"{df_ind['RSI_14'].iloc[-1]:.1f}")
+    c4.metric("ADX-14", f"{df_ind['ADX_14'].iloc[-1]:.1f}")
+    st.markdown("—")
+    plot_candles(df_ind, ticker)
 
-data = df_ind.reset_index()
-data["Date"] = pd.to_datetime(data["Date"])
-data["Days"] = (data["Date"] - data["Date"].min()).dt.days
+with tab2:
+    st.subheader("Price with Key Indicators")
+    plot_price_with_indicators(df_ind, ticker)
 
-X = data[["Days"]]
-y = data["Close"]
+    st.markdown("### Oscillators")
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.line_chart(df_ind[["RSI_14"]])
+        st.line_chart(df_ind[["STOCH_K","STOCH_D"]])
+    with c2:
+        st.line_chart(df_ind[["MACD","MACD_SIGNAL"]])
+        st.line_chart(df_ind[["BB_WIDTH"]])
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+with tab3:
+    st.subheader(f"Strategy: {strategy_name}")
+    show_backtest(df_ind, strategy_name, trade_cost_bps=cost_bps)
 
-model = LinearRegression()
-model.fit(X_train, y_train)
+with tab4:
+    st.subheader("Next-Day Direction & Return (Toy Model)")
+    try:
+        results, importances = train_predict(df_ind)
+        st.json(results)
+        if importances is not None:
+            st.bar_chart(importances)
+        st.caption("Models are simplistic; treat outputs as rough signals only.")
+    except Exception as e:
+        st.error(f"Prediction failed: {e}")
+        st.info("Try increasing history length or switching interval to 1d.")
 
-y_pred = model.predict(X_test)
-rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-
-st.write(f"**Model RMSE:** {rmse:.2f}")
-
-future_days = st.slider("Predict next N days", 1, 60, 15)
-future = pd.DataFrame({"Days": np.arange(data["Days"].max() + 1, data["Days"].max() + future_days + 1)})
-future_preds = model.predict(future)
-
-fig2 = go.Figure()
-fig2.add_trace(go.Scatter(x=data["Date"], y=y, mode='lines', name="Actual"))
-fig2.add_trace(go.Scatter(x=X_test["Days"].apply(lambda x: data["Date"].min() + pd.Timedelta(days=x)),
-                          y=y_pred, mode='lines', name="Predicted"))
-future_dates = pd.date_range(start=data["Date"].max(), periods=future_days+1, freq='D')[1:]
-fig2.add_trace(go.Scatter(x=future_dates, y=future_preds, mode='lines', name="Future Forecast"))
-fig2.update_layout(title=f"Prediction for {ticker}", template="plotly_dark", height=500)
-
-st.plotly_chart(fig2, use_container_width=True)
+st.markdown("---")
+st.caption("© 2025 — Built for local use, free. Uses open libraries: streamlit, yfinance, ta, scikit-learn, plotly.")
