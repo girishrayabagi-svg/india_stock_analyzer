@@ -157,8 +157,16 @@ def load_data(ticker, years):
     df["EMA26"] = df["Close"].ewm(span=26, adjust=False).mean()
     df["MACD"] = df["EMA12"] - df["EMA26"]
     df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
-    df["BB_High"] = df["MA20"] + 2 * df["Close"].rolling(20).std()
-    df["BB_Low"] = df["MA20"] - 2 * df["Close"].rolling(20).std()
+    from ta.volatility import BollingerBands
+
+# Initialize Bollinger Bands
+indicator_bb = BollingerBands(close=df["Close"], window=20, window_dev=2)
+
+# Add Bollinger Bands columns
+df['BB_High'] = indicator_bb.bollinger_hband()
+df['BB_Low'] = indicator_bb.bollinger_lband()
+df['BB_Mid'] = indicator_bb.bollinger_mavg()
+
     return df
 
 
