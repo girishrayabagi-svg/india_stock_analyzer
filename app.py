@@ -34,7 +34,7 @@ def load_data(ticker, years):
     df = yf.download(ticker, period=f"{years}y", interval="1d")
     df.reset_index(inplace=True)
     return df
-    ))
+    
 def plot_price_with_indicators(df, ticker):
     fig = go.Figure()
     fig.add_trace(go.Scatter(
