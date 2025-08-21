@@ -292,7 +292,24 @@ with tab1:
     c4.metric("ADX-14", f"{df_ind['ADX_14'].iloc[-1]:.1f}")
     st.markdown("—")
     # candlestick
-    plot_candles(df_ind, ticker)
+def plot_candles(df, ticker):
+    import plotly.graph_objs as go
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df['Open'],
+        high=df['High'],
+        low=df['Low'],
+        close=df['Close'],
+        name="Candlestick"
+    ))
+    fig.update_layout(
+        title=f"{ticker} Candlestick Chart",
+        xaxis_rangeslider_visible=False,
+        template="plotly_dark",
+        height=600
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
     st.subheader("Price with Key Indicators")
