@@ -1,12 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-@st.cache_data
-def load_data(ticker, years):
-    """Download stock data from Yahoo Finance"""
-    df = yf.download(ticker, period=f"{years}y", interval="1d")
-    df.reset_index(inplace=True)
-    return df
 import numpy as np
 import plotly.graph_objs as go
 from sklearn.model_selection import train_test_split
@@ -34,7 +28,13 @@ def plot_candles(df, ticker):
     )
     st.plotly_chart(fig, use_container_width=True)
 
-
+@st.cache_data
+def load_data(ticker, years):
+    """Download stock data from Yahoo Finance"""
+    df = yf.download(ticker, period=f"{years}y", interval="1d")
+    df.reset_index(inplace=True)
+    return df
+    ))
 def plot_price_with_indicators(df, ticker):
     fig = go.Figure()
     fig.add_trace(go.Scatter(
