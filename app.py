@@ -147,25 +147,23 @@ stock_list = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS"]
 ticker = st.selectbox("Choose a Stock", stock_list, index=0)
 years = st.slider("Years of history", 1, 15, 5)
 
-@st.cache_data
-def load_data(ticker, years):
-    df = yf.download(ticker, period=f"{years}y", interval="1d")
-    df["MA20"] = df["Close"].rolling(20).mean()
-    df["MA50"] = df["Close"].rolling(50).mean()
-    df["RSI"] = compute_rsi(df["Close"])
-    df["EMA12"] = df["Close"].ewm(span=12, adjust=False).mean()
-    df["EMA26"] = df["Close"].ewm(span=26, adjust=False).mean()
-    df["MACD"] = df["EMA12"] - df["EMA26"]
-    df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+)
+def add_indicators(df):
+    # RSI
+    df['RSI'] = ta.momentum.RSIIndicator(df['Close']).rsi()
+
+    # MACD
+    macd = ta.trend.MACD(df['Close'])
+    df['MACD'] = macd.macd()
+    df['MACD_Signal'] = macd.macd_signal()
+    df['MACD_Hist'] = macd.macd_diff()
+
+    # Bollinger Bands
     from ta.volatility import BollingerBands
-
-# Initialize Bollinger Bands
-indicator_bb = BollingerBands(close=df["Close"], window=20, window_dev=2)
-
-# Add Bollinger Bands columns
-df['BB_High'] = indicator_bb.bollinger_hband()
-df['BB_Low'] = indicator_bb.bollinger_lband()
-df['BB_Mid'] = indicator_bb.bollinger_mavg()
+    indicator_bb = BollingerBands(close=df["Close"], window=20, window_dev=2)
+    df['BB_High'] = indicator_bb.bollinger_hband()
+    df['BB_Low'] = indicator_bb.bollinger_lband()
+    df['BB_Mid'] = indicator_bb.bollinger_mavg()
 
     return df
 
