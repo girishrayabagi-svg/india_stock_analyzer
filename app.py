@@ -1,6 +1,12 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+@st.cache_data
+def load_data(ticker, years):
+    """Download stock data from Yahoo Finance"""
+    df = yf.download(ticker, period=f"{years}y", interval="1d")
+    df.reset_index(inplace=True)
+    return df
 import numpy as np
 import plotly.graph_objs as go
 from sklearn.model_selection import train_test_split
